@@ -85,7 +85,7 @@ SYSCTL_INT(_debug, OID_AUTO, nvaccel_igpu, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG
 
 extern "C" kern_return_t _start(kmod_info_t *ki, void *d); extern "C" kern_return_t _stop(kmod_info_t *ki, void *d);
 #ifdef NMX_ACCEL
-extern "C" { KMOD_EXPLICIT_DECL(com.luuumi.PhxAccel, "0.1", _start, _stop) }
+extern "C" { KMOD_EXPLICIT_DECL(com.luuumi.PhxAccel, "0.1.1", _start, _stop) }
 #else
 extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.NVAccel, "0.1", _start, _stop) }
 #endif
