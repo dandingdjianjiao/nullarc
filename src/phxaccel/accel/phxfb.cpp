@@ -20,8 +20,6 @@
 #include <sys/sysctl.h>
 #include "nvrm_vram_abi.h"
 #include "nvrm_gpuva_abi.h"
-#include "ThinkBookPanelEdid.h"
-#include <pexpert/pexpert.h>
 
 void phxAgdcInstall();   // phxagdc.cpp: the AppleGraphicsDeviceControl that reports this panel (debug.phxagdc)
 void phxAgdcRemove();
@@ -74,14 +72,6 @@ class PhxAMDFB : public IOFramebuffer {
     bool fBeside = false;   // another framebuffer (the firmware's IONDRV one) already drives this GPU: not the console
     IOPhysicalAddress fBase = 0;
     uint32_t fWidth = 0, fHeight = 0, fRowBytes = 0;
-    bool fThinkBookHiDPI = false;
-    UInt32 panelModeFlags() const {
-        UInt32 flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
-        if (fThinkBookHiDPI) flags |= kDisplayModeNativeFlag | kDisplayModeBuiltInFlag |
-            kDisplayModeValidForHiResFlag | kDisplayModeAcceleratorBackedFlag;
-        return flags;
-    }
-
     static constexpr uint64_t kFrameNs = 16666667ull;   // 60 Hz, when the refresh cannot be measured
     uint64_t fFrameNs = kFrameNs;
     uint32_t fRefreshMilliHz = 60000, fHTotal = 0, fVTotal = 0;
@@ -275,26 +265,13 @@ public:
     }
     IODeviceMemory *getVRAMRange() override { return getApertureRange(kIOFBSystemAperture); }
     const char *getPixelFormats() override { return IO32BitDirectPixels "\0"; }
-    // Publish the measured panel EDID; this does NOT select or program a hardware timing.
-    bool hasDDCConnect(IOIndex idx) override {
-        return fThinkBookHiDPI && idx == 0;
-    }
-    IOReturn getDDCBlock(IOIndex idx, UInt32 block, IOSelect type, IOOptionBits,
-                        UInt8 *data, IOByteCount *length) override {
-        if (!fThinkBookHiDPI || idx != 0) return kIOReturnUnsupported;
-        if (!data || !length || *length < 128 || type != kIODDCBlockTypeEDID) return kIOReturnBadArgument;
-        if (block < 1 || block > sizeof(kThinkBookPanelEdid) / 128) return kIOReturnNoDevice;
-        memcpy(data, kThinkBookPanelEdid + (block - 1) * 128, 128);
-        *length = 128;
-        return kIOReturnSuccess;
-    }
     IOItemCount getDisplayModeCount() override { return 1; }
     IOReturn getDisplayModes(IODisplayModeID *modes) override { modes[0] = 1; return kIOReturnSuccess; }
     IOReturn getInformationForDisplayMode(IODisplayModeID mode, IODisplayModeInformation *info) override {
         if (mode != 1 || !info) return kIOReturnBadArgument;
         bzero(info, sizeof(*info));
         info->maxDepthIndex = 0; info->nominalWidth = fWidth; info->nominalHeight = fHeight;
-        info->refreshRate = (IOFixed1616)(((uint64_t)fRefreshMilliHz << 16) / 1000); info->flags = panelModeFlags();
+        info->refreshRate = (IOFixed1616)(((uint64_t)fRefreshMilliHz << 16) / 1000); info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
         return kIOReturnSuccess;
     }
     UInt64 getPixelFormatsForDisplayMode(IODisplayModeID, IOIndex) override { return 0; }
@@ -373,9 +350,6 @@ public:
         }
     }
     IOReturn getAttributeForConnection(IOIndex idx, IOSelect attr, uintptr_t *value) override {
-        // IOGraphics documents a NULL value for this capability query.
-        if (idx == 0 && attr == kConnectionSupportsHLDDCSense && fThinkBookHiDPI)
-            return kIOReturnSuccess;
         if (idx != 0 || !value) return kIOReturnBadArgument;
         switch (attr) {
         case kConnectionEnable: case kConnectionCheckEnable: *value = 1; return kIOReturnSuccess;
@@ -387,7 +361,7 @@ public:
         }
     }
     IOReturn connectFlags(IOIndex, IODisplayModeID, IOOptionBits *flags) override {
-        if (flags) *flags = panelModeFlags();
+        if (flags) *flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
         return kIOReturnSuccess;
     }
     // The accelerator's display pipe asks for the scan-out: its CPU mapping (frames are copied in) and its physical
@@ -505,20 +479,6 @@ bool PhxAMDFB::start(IOService *provider)
         return false;
     }
     fWidth = (uint32_t)v.v_width; fHeight = (uint32_t)v.v_height; fRowBytes = (uint32_t)v.v_rowBytes;
-    int enableHiDPI = 1;
-    PE_parse_boot_argn("phxhidpi", &enableHiDPI, sizeof(enableHiDPI));
-    // This local build is for the known 3072x1920 ThinkBook internal GOP surface only.
-    fThinkBookHiDPI = enableHiDPI && !fBeside && fWidth == 3072 && fHeight == 1920;
-    setProperty("PhxFBLocalVariant", "thinkbook-edid-hidpi-1");
-    setProperty("PhxFBHiDPIEnabled", fThinkBookHiDPI);
-    if (fThinkBookHiDPI) {
-        if (OSData *edid = OSData::withBytes(kThinkBookPanelEdid, sizeof(kThinkBookPanelEdid))) {
-            setProperty("IODisplayEDID", edid);
-            edid->release();
-        }
-    }
-    PFBLOG("ThinkBook EDID/HiDPI metadata %s; hardware timing unchanged", fThinkBookHiDPI ? "enabled" : "disabled");
-
     // once the video console is up, the platform expert hands out the console's kernel mapping, not the physical
     // address. The GOP surface sits in one of the GPU's BARs (VRAM aperture): find the BAR whose start holds the same
     // pixels as the console mapping. (A descriptor over the mapping would need prepare(): getPhysicalSegment on an
