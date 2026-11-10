@@ -646,7 +646,7 @@ bool PhxAMDFB::start(IOService *provider)
     }
     fWidth = (uint32_t)v.v_width; fHeight = (uint32_t)v.v_height; fRowBytes = (uint32_t)v.v_rowBytes;
     // Every PhxAMDFB uses its current GOP raster as mode 1. Advertise HiRes for that
-    // mode on any supported GPU/panel; the OS validates and chooses logical modes.
+    // mode without panel-specific checks; this does not initialize a second connector.
     // An opt-out keeps the original mode flags available for hardware-specific triage.
     fHiResModeFlag = !PE_parse_boot_argn("-phxhidpioff", arg, sizeof arg);
     // once the video console is up, the platform expert hands out the console's kernel mapping, not the physical
