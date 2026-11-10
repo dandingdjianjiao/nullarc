@@ -87,6 +87,7 @@ class PhxAMDFB : public IOFramebuffer {
     bool fBeside = false;   // another framebuffer (the firmware's IONDRV one) already drives this GPU: not the console
     IOPhysicalAddress fBase = 0;
     uint32_t fWidth = 0, fHeight = 0, fRowBytes = 0;
+    bool fThinkBookModeMetadata = false;  // native 3072x1920 mode metadata, not a logical/scan-out resize
     static constexpr uint64_t kFrameNs = 16666667ull;   // 60 Hz, when the refresh cannot be measured
     uint64_t fFrameNs = kFrameNs;
     uint32_t fRefreshMilliHz = 60000, fHTotal = 0, fVTotal = 0;
@@ -356,7 +357,11 @@ public:
         if (mode != 1 || !info) return kIOReturnBadArgument;
         bzero(info, sizeof(*info));
         info->maxDepthIndex = 0; info->nominalWidth = fWidth; info->nominalHeight = fHeight;
-        info->refreshRate = (IOFixed1616)(((uint64_t)fRefreshMilliHz << 16) / 1000); info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag | kFramebufferSupportsGammaCorrection;
+        info->refreshRate = (IOFixed1616)(((uint64_t)fRefreshMilliHz << 16) / 1000);
+        // These are IODisplayModeInformation flags. kFramebufferSupportsGammaCorrection belongs to a
+        // different flag namespace; gamma capability remains advertised by the existing registry properties.
+        info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
+        if (fThinkBookModeMetadata) info->flags |= kDisplayModeValidForHiResFlag;
         return kIOReturnSuccess;
     }
     UInt64 getPixelFormatsForDisplayMode(IODisplayModeID, IOIndex) override { return 0; }
@@ -451,6 +456,7 @@ public:
         default: return IOFramebuffer::getAttributeForConnection(idx, attr, value);
         }
     }
+    // Only Valid/Safe/Default belong to connection sensing; HiRes is a native mode capability.
     IOReturn connectFlags(IOIndex, IODisplayModeID, IOOptionBits *flags) override {
         if (flags) *flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
         return kIOReturnSuccess;
@@ -637,6 +643,13 @@ bool PhxAMDFB::start(IOService *provider)
         return false;
     }
     fWidth = (uint32_t)v.v_width; fHeight = (uint32_t)v.v_height; fRowBytes = (uint32_t)v.v_rowBytes;
+    // Only the measured 780M ThinkBook native GOP surface is eligible. No EDID is fabricated:
+    // the current user override already supplies the real 384-byte panel EDID to CoreDisplay.
+    // Keep the native mode ID, physical dimensions, timing and scan-out unchanged.
+    fThinkBookModeMetadata = !fBeside && fPCI->configRead16(kIOPCIConfigVendorID) == 0x1002 &&
+                             fPCI->configRead16(kIOPCIConfigDeviceID) == 0x1900 &&
+                             fWidth == 3072 && fHeight == 1920 &&
+                             !PE_parse_boot_argn("-phxhidpimetaoff", arg, sizeof arg);
     // once the video console is up, the platform expert hands out the console's kernel mapping, not the physical
     // address. The GOP surface sits in one of the GPU's BARs (VRAM aperture): find the BAR whose start holds the same
     // pixels as the console mapping. (A descriptor over the mapping would need prepare(): getPhysicalSegment on an
@@ -692,6 +705,10 @@ bool PhxAMDFB::start(IOService *provider)
     fVa = IORangeAllocator::withRange(kVaSize - 1, PAGE_SIZE, 0, IORangeAllocator::kLocking);
     poolInit();
     setProperty("built-in", kOSBooleanTrue);
+    setProperty("PhxFBLocalVariant", "thinkbook-mode-meta-2");
+    setProperty("PhxFBHiDPIMetadataEnabled", fThinkBookModeMetadata);
+    PFBLOG("ThinkBook native mode metadata %s (3072x1920 scan-out unchanged; no EDID emulation)",
+           fThinkBookModeMetadata ? "enabled" : "disabled");
     setProperty("IOFBGammaWidth", 8ull, 32);
     setProperty("IOFBGammaCount", 256ull, 32);
     setProperty("DisplayGammaChannels", 3ull, 32);
